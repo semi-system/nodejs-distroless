@@ -1,8 +1,10 @@
 #!/bin/sh
 # Assemble the newest npm release of NPM_MAJOR into $1, then upgrade each
 # bundled dependency named in NPM_DEPENDENCY_OVERRIDES to its newest release
-# in the same major. Every tarball must match the registry integrity hash and
-# carry a valid npm registry ECDSA signature.
+# in the same major, or in MAJOR for a NAME@MAJOR entry (never below the
+# bundled major). Dependencies an upgrade needs that the bundled tree does not
+# satisfy are nested under it. Every tarball must match the registry integrity
+# hash and carry a valid npm registry ECDSA signature.
 set -eu
 
 out="$1"
@@ -48,8 +50,71 @@ fetch() {
   echo "$name@$version verified"
 }
 
+# satisfies RANGE VERSION: VERSION is in the caret RANGE ^X.Y.Z (X > 0).
+satisfies() {
+  case "$1" in
+    ^[1-9]*.*.*) ;;
+    *) echo "unsupported dependency range: $1" >&2; exit 1 ;;
+  esac
+  awk -v min="${1#^}" -v v="$2" 'BEGIN {
+    split(min, a, "."); split(v, b, ".")
+    if (a[1] + 0 != b[1] + 0) exit 1
+    for (i = 2; i <= 3; i++) {
+      if (b[i] + 0 > a[i] + 0) exit 0
+      if (b[i] + 0 < a[i] + 0) exit 1
+    }
+  }'
+}
+
+# resolve DIR NAME: the package.json Node.js would load for NAME from DIR.
+resolve() {
+  dir="$1"
+  while :; do
+    if [ -f "$dir/node_modules/$2/package.json" ]; then
+      echo "$dir/node_modules/$2/package.json"
+      return
+    fi
+    [ "$dir" = "$out" ] && return
+    dir="$(dirname "$dir")"
+  done
+}
+
+# fetch_deps DIR: nest the newest matching release of each dependency of the
+# package in DIR that the surrounding tree does not satisfy, recursively.
+fetch_deps() {
+  deps="$(mktemp "$work/deps.XXXXXX")"
+  jq -r '.dependencies // {} | to_entries[] | "\(.key) \(.value)"' "$1/package.json" > "$deps"
+  while read -r dep range; do
+    found="$(resolve "$1" "$dep")"
+    if [ -n "$found" ] && satisfies "$range" "$(jq -r .version "$found")"; then
+      continue
+    fi
+    major="${range#^}"
+    fetch "$dep" "${major%%.*}" "$1/node_modules/$dep" < /dev/null
+    (fetch_deps "$1/node_modules/$dep")
+  done < "$deps"
+  rm -f "$deps"
+}
+
 fetch npm "$NPM_MAJOR" "$out"
-for name in $NPM_DEPENDENCY_OVERRIDES; do
+for spec in $NPM_DEPENDENCY_OVERRIDES; do
+  case "$spec" in
+    ?*@*) name="${spec%@*}" major="${spec##*@}" ;;
+    *) name="$spec" major= ;;
+  esac
   bundled="$(jq -r .version "$out/node_modules/$name/package.json")"
-  fetch "$name" "${bundled%%.*}" "$out/node_modules/$name"
+  bundled="${bundled%%.*}"
+  if [ -z "$major" ] || [ "$major" -lt "$bundled" ]; then
+    major="$bundled"
+  fi
+  fetch "$name" "$major" "$out/node_modules/$name"
+done
+# Resolve dependencies only once every override is in place, so an upgraded
+# package finds the other upgrades instead of nesting its own copies.
+for spec in $NPM_DEPENDENCY_OVERRIDES; do
+  case "$spec" in
+    ?*@*) name="${spec%@*}" ;;
+    *) name="$spec" ;;
+  esac
+  (fetch_deps "$out/node_modules/$name")
 done

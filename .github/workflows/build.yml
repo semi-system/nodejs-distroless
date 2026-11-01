@@ -145,12 +145,26 @@ jobs:
           DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
           set -euo pipefail
-          platform_digests="$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" |
+          # Sigstore and GHCR fail transiently; retry each network call.
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if "$@"; then
+                return 0
+              fi
+              if (( attempt < 3 )); then
+                echo "attempt ${attempt} failed, retrying: $1" >&2
+                sleep $(( attempt * 20 ))
+              fi
+            done
+            return 1
+          }
+          platform_digests="$(retry docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" |
             jq -r '.manifests[] | select(.platform.os == "linux") | .digest')"
           for digest in ${platform_digests}; do
-            syft "${IMAGE}@${digest}" -o spdx-json=sbom.spdx.json
-            cosign attest --yes \
+            retry syft "${IMAGE}@${digest}" -o spdx-json=sbom.spdx.json
+            retry cosign attest --yes \
               --type spdxjson --predicate sbom.spdx.json "${IMAGE}@${digest}"
-            cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${digest}"
+            retry cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${digest}"
           done
-          cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${DIGEST}"
+          retry cosign sign --yes --registry-referrers-mode=legacy "${IMAGE}@${DIGEST}"

@@ -3,11 +3,12 @@ FROM node:${NODE_MAJOR}-bookworm-slim AS node
 
 # The npm bundled with Node.js ships dependencies with known CVEs. Fetch the
 # newest npm instead and upgrade the bundled dependencies it has not bumped
-# yet; drop a name from the list once npm ships the fix itself.
+# yet; NAME@MAJOR moves one to a newer major when only that has the fix.
+# Drop an entry from the list once npm ships the fix itself.
 FROM cgr.dev/chainguard/wolfi-base:latest AS npm
 ARG CACHE_BUST=local
 ARG NPM_MAJOR=12
-ARG NPM_DEPENDENCY_OVERRIDES="ip-address undici"
+ARG NPM_DEPENDENCY_OVERRIDES="ip-address undici glob@14 minimatch@11"
 COPY scripts/fetch-npm.sh /usr/local/bin/fetch-npm
 RUN test -n "$CACHE_BUST" && \
     apk add --no-cache ca-certificates curl jq openssl && \
