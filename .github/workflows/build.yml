@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Allow runner user to access Docker
-        run: sudo setfacl -m "u:$(id -u):rw" /var/run/docker.sock
+        run: sudo chown "$(id -u)" /var/run/docker.sock
 
       - uses: docker/setup-buildx-action@v3
 
@@ -111,7 +111,7 @@ jobs:
         flavor: [builder, runtime]
     steps:
       - name: Allow runner user to access Docker
-        run: sudo setfacl -m "u:$(id -u):rw" /var/run/docker.sock
+        run: sudo chown "$(id -u)" /var/run/docker.sock
 
       - uses: actions/download-artifact@v4
         with:
