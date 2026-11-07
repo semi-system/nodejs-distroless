@@ -133,8 +133,7 @@ Pin the immutable `<git-sha>-<DDMMYYYY>` tag, or pin by digest
 
 **How are the images built?**
 GitHub Actions (`.github/workflows/build.yml`): a 2×2 matrix
-(Node 22/24 × builder/runtime) builds each Dockerfile, scans with Trivy via
-[`abxst/actions/strict`](https://github.com/abxst/actions) — failing on any
+(Node 22/24 × builder/runtime) builds each Dockerfile, scans with Trivy — failing on any
 finding — then pushes to ghcr.io.
 
 ## License
