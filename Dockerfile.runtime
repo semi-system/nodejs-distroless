@@ -1,6 +1,6 @@
 ARG NODE_MAJOR=22
 FROM node:${NODE_MAJOR}-bookworm-slim AS node
-FROM ghcr.io/morningstar-sudo/baseless-glibc:latest AS baseless-runtime
+FROM ghcr.io/semi-system/baseless-glibc:latest AS baseless-runtime
 
 FROM cgr.dev/chainguard/wolfi-base:latest AS build
 
