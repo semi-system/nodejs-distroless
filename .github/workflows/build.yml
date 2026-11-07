@@ -13,19 +13,15 @@ permissions:
   id-token: write
 
 jobs:
-  # Each architecture builds and scans natively on its own runner (no QEMU)
-  # and pushes an untagged per-architecture image; merge joins them by digest
-  # and applies the only tags: latest and <sha>-<date>.
+  # Build and scan AMD64 images on the organization runner.
+  # Publish immutable digests before applying latest and <sha>-<date> tags.
   build:
-    runs-on: ${{ matrix.platform.runner }}
+    runs-on: [self-hosted, Linux, X64, semi-system]
     strategy:
       fail-fast: false
       matrix:
         node: ["22", "24"]
         flavor: [builder, runtime]
-        platform:
-          - { arch: amd64, runner: ubuntu-24.04 }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
     env:
       BUILD_ARGS: |
         NODE_MAJOR=${{ matrix.node }}
@@ -54,8 +50,8 @@ jobs:
           push: false
           image-name: ${{ github.repository }}-${{ matrix.node }}-${{ matrix.flavor }}
           dockerfile: ./Dockerfile.${{ matrix.flavor }}
-          platforms: linux/${{ matrix.platform.arch }}
-          scan-platform: linux/${{ matrix.platform.arch }}
+          platforms: linux/amd64
+          scan-platform: linux/amd64
           build-args: ${{ env.BUILD_ARGS }}
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +63,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile.${{ matrix.flavor }}
-          platforms: linux/${{ matrix.platform.arch }}
+          platforms: linux/amd64
           build-args: ${{ env.BUILD_ARGS }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
@@ -86,17 +82,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: steps.push.outputs.digest != ''
         with:
-          name: digests-${{ matrix.node }}-${{ matrix.flavor }}-${{ matrix.platform.arch }}
+          name: digests-${{ matrix.node }}-${{ matrix.flavor }}-amd64
           path: digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
     needs: build
-    # Run even when another matrix cell failed; a variant missing an
-    # architecture fails its own merge below instead of blocking the rest.
+    # Allow successful variants to publish when another matrix cell fails.
     if: ${{ !cancelled() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, semi-system]
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +110,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create multi-arch manifest
+      - name: Create AMD64 manifest
         id: manifest
         env:
           NAME: ghcr.io/${{ github.repository }}-${{ matrix.node }}-${{ matrix.flavor }}
@@ -125,9 +120,10 @@ jobs:
           tags=("${image}:${GITHUB_SHA::7}-$(date -u +%d%m%Y)" "${image}:latest")
           sources=()
           for file in digests/*; do
+            test -f "${file}"
             sources+=("${image}@sha256:${file##*/}")
           done
-          test "${#sources[@]}" -eq 2
+          test "${#sources[@]}" -eq 1
           docker buildx imagetools create "${tags[@]/#/--tag=}" "${sources[@]}"
           digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
@@ -160,7 +156,7 @@ jobs:
             return 1
           }
           platform_digests="$(retry docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" |
-            jq -r '.manifests[] | select(.platform.os == "linux") | .digest')"
+            jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
           for digest in ${platform_digests}; do
             retry syft "${IMAGE}@${digest}" -o spdx-json=sbom.spdx.json
             retry cosign attest --yes \
